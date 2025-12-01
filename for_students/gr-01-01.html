@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Zombie Defense - Simple Version</title>
+    <style>
+        html, body { height:200%; }
+        body {
+            margin: 0;
+            overflow: auto; /* allow scrolling when canvas is taller than viewport */
+            font-family: Arial, sans-serif;
+            background: #000;
+        }
+        
+        /* 3D场景 */
+        #div1 {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%; /* double the viewport height */
+            z-index: 0; /* put behind UI */
+        }
+        /* make sure the automatic canvas inside the world is behind UI */
+        #div1 canvas {
+            position: absolute !important;
+            top: 0 !important;
+            left: 0 !important;
+            width: 100% !important;
+            height: 100% !important;
+            z-index: 0 !important;
+        }
+        
+        /* 顶部信息栏 */
+        #hud {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.85);
+            color: #0f0;
+            padding: 12px 14px;
+            border: 2px solid #0f0;
+            border-radius: 8px;
+            font-size: 15px;
+            z-index: 1001; /* ensure HUD is above the canvas */
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            max-width: 320px;
+            box-sizing: border-box;
+        }
+        
+        #hud div {
+            margin: 5px 0;
+        }
+        
+        /* 购买按钮 */
+        #buy-helicopter {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: #0f0;
+            color: #000;
+            border: none;
+            padding: 12px 20px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            border-radius: 8px;
+            z-index: 1002; /* above HUD for visibility */
+            box-shadow: 0 2px 8px rgba(0,0,0,.4);
+        }
+        
+        #buy-helicopter:hover {
+            background: #0ff;
+        }
+        
+        #buy-helicopter.disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        
+        /* 提示消息 */
+        .message {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.9);
+            color: #0f0;
+            padding: 20px 40px;
+            border: 2px solid #0f0;
+            border-radius: 10px;
+            font-size: 24px;
+            z-index: 200;
+            animation: fadeOut 2s forwards;
+        }
+        
+        @keyframes fadeOut {
+            0%, 50% { opacity: 1; }
+            100% { opacity: 0; }
+        }
+        
+        /* 游戏结束 */
+        #game-over-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.95);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 2000; /* ensure it overlays everything when shown */
+        }
+        
+        #game-over-screen.show {
+            display: flex;
+        }
+        
+        #game-over-content {
+            text-align: center;
+            color: #f00;
+            font-size: 48px;
+            font-weight: bold;
+        }
+        
+        #game-over-content p {
+            font-size: 24px;
+            color: #fff;
+        }
+        
+        #restart-button {
+            background: #0f0;
+            color: #000;
+            border: none;
+            padding: 15px 40px;
+            font-size: 20px;
+            font-weight: bold;
+            cursor: pointer;
+            border-radius: 5px;
+            margin-top: 20px;
+        }
+        
+        #restart-button:hover {
+            background: #0ff;
+        }
+        
+        /* Video (preview) */
+        #zombie-video {
+            display: block !important;
+            visibility: visible !important;
+            width: auto !important; /* width will be controlled via JS to match canvas */
+            height: 150px !important;
+            max-width: 45vw;
+            border-radius: 4px !important;
+            background: #000;
+            object-fit: contain;
+        }
+        
+        /* Skeleton overlay canvas - ensure it doesn't block clicks */
+        #skeleton-canvas {
+            pointer-events: none; /* ensure in-game clicks still reach the world */
+            width: auto !important; /* width will be controlled via JS to match canvas */
+            height: 150px !important; 
+            max-width: 45vw;
+            z-index: 1000;
+        }
+        /* ensure both the original video and skeleton preview scale and stay the same size */
+        .comp-item { flex: 0 0 auto; }
+        .comp-item video, .comp-item canvas { max-width: 45vw; display:block; height:auto; }
+    </style>
+</head>
+<body>
+    <!-- 3D场景 -->
+    <div id="div1"></div>
+    
+    <!-- HUD信息 -->
+    <div id="hud">
+        <div id="status" style="display:none">Status: Ready</div>
+        <div>💰 Gold: <span id="gold-display">500</span></div>
+        <div>❤️ Health: <span id="health-display"></span></div>
+        <div>🧟 Zombies: <span id="zombie-count">0</span></div>
+        <div>🚁 Helicopters: <span id="heli-count">0</span></div>
+        <div>💀 Kills: <span id="kill-count">0</span></div>
+        <div>🌊 Wave: <span id="wave-number">1</span> <span id="wave-label" style="font-size:12px;margin-left:8px">Difficulty: x1.0</span></div>
+    </div>
+    
+    <!-- 购买直升机按钮 -->
+    <button id="buy-helicopter">🚁 Buy Helicopter (500💰)</button>
+    
+    <!-- 游戏结束屏幕 -->
+    <div id="game-over-screen">
+        <div id="game-over-content">
+            💀 GAME OVER 💀
+            <p>Wave: <span id="final-wave">0</span></p>
+            <p>Kills: <span id="final-kills">0</span></p>
+            <p>Gold: <span id="final-gold">0</span></p>
+            <button id="restart-button">🔄 Restart</button>
+        </div>
+    </div>
+    
+    <!-- 底部对比：原始视频和骨骼绑定 -->
+    <div id="comparison" style="position:fixed;bottom:0;left:0;right:0;display:flex;flex-direction:row;align-items:center;justify-content:center;gap:12px;z-index:1003;padding:8px;background:rgba(0,0,0,0.4);flex-wrap:nowrap">
+        <div class="comp-item" style="display:flex;flex-direction:column;align-items:center;">
+            <video id="zombie-video" autoplay loop muted playsinline style="border:2px solid #0f0;border-radius:4px">
+                <source src="zombie-walk.mp4" type="video/mp4">
+            </video>
+            <div style="color:#fff;font-size:12px;margin-top:6px">Original Video</div>
+        </div>
+        <div class="comp-item" style="display:flex;flex-direction:column;align-items:center;">
+            <canvas id="skeleton-canvas" width="640" height="360" style="width:auto;height:auto;border:2px solid #0f0;border-radius:4px;background:#000;pointer-events:none"></canvas>
+            <div style="color:#fff;font-size:12px;margin-top:6px">Skeleton Preview</div>
+        </div>
+    </div>
+
+    <!-- (skeleton canvas moved into comparison area) -->
+    
+    <!-- 加载库 -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
+    
+    <!-- Import map for resolving 'three' bare module specifier to local file -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "../libs/CS559-Three/build/three.module.js"
+        }
+    }
+    </script>
+    
+    <!-- 加载游戏脚本 -->
+    <script type="module" src="./gr-01-01.js"></script>
+</body>
+</html>
