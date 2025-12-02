@@ -44,6 +44,13 @@ export class Helipad extends GrObject {
     }
 }
 
+function shortestAngleDiff(target, current) {
+    let diff = target - current;
+    while (diff > Math.PI) diff -= 2 * Math.PI;
+    while (diff < -Math.PI) diff += 2 * Math.PI;
+    return diff;
+}
+
 /**
  * 高精度直升机类 - 带自动飞行功能
  */
@@ -353,39 +360,39 @@ export class DetailedHelicopter extends GrObject {
             metalness: 0.9,
             roughness: 0.1
         });
-        
-        // 双管机枪
-        const gunBarrelGeometry = new T.CylinderGeometry(0.04, 0.04, 0.6, 8);
-        
-        // 左枪管
-        const leftGunBarrel = new T.Mesh(gunBarrelGeometry, gunBarrelMaterial);
-        leftGunBarrel.rotation.z = Math.PI / 2;
-        leftGunBarrel.position.set(0.3, 0.05, 0.08);
-        this.gunRotator.add(leftGunBarrel);
-        
-        // 右枪管
-        const rightGunBarrel = new T.Mesh(gunBarrelGeometry, gunBarrelMaterial);
-        rightGunBarrel.rotation.z = Math.PI / 2;
-        rightGunBarrel.position.set(0.3, 0.05, -0.08);
-        this.gunRotator.add(rightGunBarrel);
-        
-        // 机枪枪口
+         // 机枪枪口
         const muzzleGeometry = new T.CylinderGeometry(0.05, 0.04, 0.05, 8);
         const muzzleMaterial = new T.MeshStandardMaterial({
             color: 0x333333,
             metalness: 0.8,
             roughness: 0.3
         });
-        
-        const leftMuzzle = new T.Mesh(muzzleGeometry, muzzleMaterial);
-        leftMuzzle.rotation.z = Math.PI / 2;
-        leftMuzzle.position.set(0.6, 0.05, 0.08);
-        this.gunRotator.add(leftMuzzle);
-        
-        const rightMuzzle = new T.Mesh(muzzleGeometry, muzzleMaterial);
-        rightMuzzle.rotation.z = Math.PI / 2;
-        rightMuzzle.position.set(0.6, 0.05, -0.08);
-        this.gunRotator.add(rightMuzzle);
+        // 枪管沿 +Z
+const gunBarrelGeometry = new T.CylinderGeometry(0.04, 0.04, 0.6, 8);
+
+// 左枪管
+const leftGunBarrel = new T.Mesh(gunBarrelGeometry, gunBarrelMaterial);
+leftGunBarrel.rotation.x = Math.PI / 2;        // Y -> Z
+leftGunBarrel.position.set(0.05, 0.05, 0.3);   // 改成沿 z
+this.gunRotator.add(leftGunBarrel);
+
+// 右枪管
+const rightGunBarrel = new T.Mesh(gunBarrelGeometry, gunBarrelMaterial);
+rightGunBarrel.rotation.x = Math.PI / 2;
+rightGunBarrel.position.set(0.05, 0.05, -0.3);
+this.gunRotator.add(rightGunBarrel);
+
+// 枪口
+const leftMuzzle = new T.Mesh(muzzleGeometry, muzzleMaterial);
+leftMuzzle.rotation.x = Math.PI / 2;
+leftMuzzle.position.set(0.05, 0.05, 0.6);
+this.gunRotator.add(leftMuzzle);
+
+const rightMuzzle = new T.Mesh(muzzleGeometry, muzzleMaterial);
+rightMuzzle.rotation.x = Math.PI / 2;
+rightMuzzle.position.set(0.05, 0.05, -0.6);
+this.gunRotator.add(rightMuzzle);
+
         
         // 弹链箱
         const ammoBoxGeometry = new T.BoxGeometry(0.15, 0.12, 0.25);
@@ -585,78 +592,95 @@ export class DetailedHelicopter extends GrObject {
             }
         }
 
-        // ==================== 武器系统更新 ====================
-        
-        // 探照灯逻辑
         if (this.spotlightTarget) {
-            // 锁定目标模式
-            const targetPos = new T.Vector3();
-            this.spotlightTarget.getWorldPosition(targetPos);
-            const heliPos = new T.Vector3();
-            this.helicopter.getWorldPosition(heliPos);
-            
-            // 计算方向
-            const direction = new T.Vector3().subVectors(targetPos, heliPos);
-            const horizontalDist = Math.sqrt(direction.x * direction.x + direction.z * direction.z);
-            
-            // 计算旋转角度（Y轴）
-            const targetAngleY = Math.atan2(direction.x, direction.z);
-            // 计算俯仰角度（X轴）
-            const targetAngleX = -Math.atan2(direction.y, horizontalDist);
-            
-            // 平滑旋转
-            this.spotlightRotator.rotation.y += (targetAngleY - this.spotlightRotator.rotation.y) * 0.1;
-            this.spotlightRotator.rotation.x += (targetAngleX - this.spotlightRotator.rotation.x) * 0.1;
-            
-            // 更新探照灯目标位置
-            this.spotlight.target.position.copy(direction.normalize().multiplyScalar(10));
-        } else {
-            // 随机旋转模式
-            this.spotlightRandomAngle += this.spotlightRandomSpeed;
-            this.spotlightRotator.rotation.y = Math.sin(this.spotlightRandomAngle) * Math.PI / 3;
-            this.spotlightRotator.rotation.x = -Math.PI / 6 + Math.cos(this.spotlightRandomAngle * 0.5);
-        }
-        
-        // 机枪瞄准逻辑
-        if (this.gunTarget) {
-            const targetPos = new T.Vector3();
-            this.gunTarget.getWorldPosition(targetPos);
-            const gunPos = new T.Vector3();
-            this.gunRotator.getWorldPosition(gunPos);
-            
-            // 计算方向
-            const direction = new T.Vector3().subVectors(targetPos, gunPos);
-            const horizontalDist = Math.sqrt(direction.x * direction.x + direction.z * direction.z);
-            
-            // 计算旋转角度
-            const targetAngleY = Math.atan2(direction.x, direction.z);
-            const targetAngleX = -Math.atan2(direction.y, horizontalDist);
-            
-            // 平滑旋转
-            this.gunRotator.rotation.y += (targetAngleY - this.gunRotator.rotation.y) * 0.15;
-            this.gunRotator.rotation.x += (targetAngleX - this.gunRotator.rotation.x) * 0.15;
-        }
+    // 锁定目标模式
+    const targetPos = new T.Vector3();
+    this.spotlightTarget.getWorldPosition(targetPos);
+    const heliPos = new T.Vector3();
+    this.helicopter.getWorldPosition(heliPos);
+    
+    // 计算方向
+    const direction = new T.Vector3().subVectors(targetPos, heliPos);
+    const horizontalDist = Math.sqrt(direction.x * direction.x + direction.z * direction.z);
+    
+    // 计算旋转角度（Y轴偏航）
+    const targetAngleY = Math.atan2(direction.x, direction.z);
+    // 计算俯仰角度（X轴）
+    const targetAngleX = -Math.atan2(direction.y, horizontalDist);
+    
+    // ---- 使用“最短角度差”平滑旋转，避免无限转圈 ----
+    const diffY = shortestAngleDiff(targetAngleY, this.spotlightRotator.rotation.y);
+    this.spotlightRotator.rotation.y += diffY * 0.1;
 
-         if (this.gunTarget) {
-        const heliPos = new T.Vector3();
-        this.objects[0].getWorldPosition(heliPos);
-        
-        const targetPos = new T.Vector3();
-        this.gunTarget.getWorldPosition(targetPos);
-        
-        const dx = targetPos.x - heliPos.x;
-        const dz = targetPos.z - heliPos.z;
-        const targetAngle = Math.atan2(dx, dz);
-        
-        // 平滑旋转直升机朝向目标
-        const currentAngle = this.objects[0].rotation.y;
-        let angleDiff = targetAngle - currentAngle;
-        
-        // 处理角度环绕
-        if (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
-        if (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
-        
-        this.objects[0].rotation.y += angleDiff * 0.05; // 慢慢转向
+    // 俯仰不用绕 2π，直接插值再做个限制
+    const diffX = targetAngleX - this.spotlightRotator.rotation.x;
+    this.spotlightRotator.rotation.x += diffX * 0.1;
+    // 防止探照灯抬得太高/太低
+    this.spotlightRotator.rotation.x = T.MathUtils.clamp(
+        this.spotlightRotator.rotation.x,
+        -Math.PI / 2,
+        Math.PI / 6
+    );
+
+    // 这里用局部 +Z 作为光束方向即可，不要用世界方向向量
+    this.spotlight.target.position.set(0, 0, 10);
+
+} else {
+    // 随机旋转模式（保持原来的“扫地”效果）
+    this.spotlightRandomAngle += this.spotlightRandomSpeed;
+    this.spotlightRotator.rotation.y = Math.sin(this.spotlightRandomAngle) * Math.PI / 3;
+    this.spotlightRotator.rotation.x = -Math.PI / 6 + Math.cos(this.spotlightRandomAngle * 0.5);
+}
+
+// 机枪瞄准逻辑
+if (this.gunTarget) {
+    const targetPos = new T.Vector3();
+    this.gunTarget.getWorldPosition(targetPos);
+    const gunPos = new T.Vector3();
+    this.gunRotator.getWorldPosition(gunPos);
+    
+    // 计算方向
+    const direction = new T.Vector3().subVectors(targetPos, gunPos);
+    const horizontalDist = Math.sqrt(direction.x * direction.x + direction.z * direction.z);
+    
+    // 计算旋转角度
+    const targetAngleY = Math.atan2(direction.x, direction.z);
+    const targetAngleX = -Math.atan2(direction.y, horizontalDist);
+    
+    // ---- 同样用“最短角度差”来避免机枪无穷转圈 ----
+    const diffY = shortestAngleDiff(targetAngleY, this.gunRotator.rotation.y);
+    this.gunRotator.rotation.y += diffY * 0.15;
+
+    const diffX = targetAngleX - this.gunRotator.rotation.x;
+    this.gunRotator.rotation.x += diffX * 0.15;
+    // 限制俯仰角，避免翻到头顶后面
+    this.gunRotator.rotation.x = T.MathUtils.clamp(
+        this.gunRotator.rotation.x,
+        -Math.PI / 3,   // 向下最多看这么多
+        Math.PI / 6     // 向上抬一点点就够
+    );
+}
+
+// 让直升机机身也缓慢朝向当前机枪目标（这一段你之前就有，只是保持）
+if (this.gunTarget) {
+    const heliPos = new T.Vector3();
+    this.objects[0].getWorldPosition(heliPos);
+    
+    const targetPos = new T.Vector3();
+    this.gunTarget.getWorldPosition(targetPos);
+    
+    const dx = targetPos.x - heliPos.x;
+    const dz = targetPos.z - heliPos.z;
+    const targetAngle = Math.atan2(dx, dz);
+    
+    const currentAngle = this.objects[0].rotation.y;
+    let angleDiff = targetAngle - currentAngle;
+
+    // 处理角度环绕，保持在 [-PI, PI]
+    if (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
+    if (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+    
+    this.objects[0].rotation.y += angleDiff * 0.05; // 慢慢转向
     }
     }
     
