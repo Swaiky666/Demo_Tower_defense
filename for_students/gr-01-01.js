@@ -4,11 +4,14 @@
 import { GrWorld } from "../libs/CS559-Framework/GrWorld.js";
 import { GrObject } from "../libs/CS559-Framework/GrObject.js";
 import * as T from "../libs/CS559-Three/build/three.module.js";
+// ⚠️ 新增：导入 OBJLoader (依赖 HTML 中的 importmap)
+import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
+
 import { DetailedHelicopter, Helipad } from "./DetailedHelicopter.js";
 import { Zombie, initSharedDetector, getPoseModelType } from "./Zombie.js";
-import { ArmoredVehicle } from "./Armoredvehicle.js";
 import { GameModels } from "./GameModels.js";
-import { CombatManager } from "./CombatManager.js";
+import { ArmoredVehicle } from "./Armoredvehicle.js"; 
+import { CombatManager } from "./Combatmanager.js"; 
 
 // ==================== 全局变量 ====================
 let world;
@@ -27,27 +30,21 @@ let sharedDetector = null;
 let skeletonCanvas;
 let skeletonCtx;
 
-// 装甲战车
-let armoredVehicle = null;
-
-// 游戏状态
+let gameStarted = false;
 let baseHealth = 5;
 let gameOver = false;
 let baseObject;
 let hearts = [];
 let turret;
-
-// 战斗管理器
+let armoredVehicle = null;
 let combatManager = null;
 
-// 经济系统
 let playerGold = 500;
 let totalKills = 0;
 let currentWave = 1;
 let spawnInterval = 5000;
 let zombieSpeedMultiplier = 1.0;
 
-// 基地参数
 const BASE_RADIUS = 2.8;
 const TURRET_DAMAGE = 50;
 const HELI_DAMAGE = 30;
@@ -56,15 +53,35 @@ const ZOMBIE_GOLD_REWARD = 30;
 const HELI_PRICE = 500;
 const SPAWN_DISTANCE = 22;
 
-// DEBUG计数器
 let debugFrameCount = 0;
 let lastDebugTime = Date.now();
 let lastWaveTime = Date.now();
 let zombieSpawnTimer = null;
 let zombiesInitialized = false;
-
-// 键盘控制
 let keys = {};
+
+// ==================== Full Mode 资源变量 ====================
+let isFullMode = false;
+const textureLoader = new T.TextureLoader();
+const objLoader = new OBJLoader();
+
+// 1. 加载地面纹理
+const groundTexture = textureLoader.load('./assets/grass.jpg', function(tex) {
+    tex.wrapS = T.RepeatWrapping;
+    tex.wrapT = T.RepeatWrapping;
+    tex.repeat.set(20, 20); // 让草地重复，避免拉伸
+});
+
+// 2. 加载天空纹理
+const skyTexture = textureLoader.load('./assets/sky.jpg');
+
+// 3. 加载 OBJ 树木组
+const decorationGroup = new T.Group();
+decorationGroup.visible = false; // 默认隐藏 (Prototype Mode)
+
+// 保存原始材质，方便切换回 Prototype
+let defaultGroundMat = null;
+let defaultBackground = null;
 
 // ==================== 初始化世界 ====================
 world = new GrWorld({
@@ -75,25 +92,88 @@ world = new GrWorld({
     where: document.getElementById("div1")
 });
 
-// ==================== 窗口调整 ====================
-function syncComparisonSizes() {
-    const video = document.getElementById('zombie-video');
-    const canvas = document.getElementById('skeleton-canvas');
-    if (video && canvas) {
-        const w = video.videoWidth || 640;
-        const h = video.videoHeight || 480;
-        const aspectRatio = w / h;
-        const displayHeight = 150;
-        const displayWidth = displayHeight * aspectRatio;
-        video.style.width = `${displayWidth}px`;
-        video.style.height = `${displayHeight}px`;
-        canvas.width = w;
-        canvas.height = h;
-        canvas.style.width = `${displayWidth}px`;
-        canvas.style.height = `${displayHeight}px`;
+// ⚠️ 将装饰物添加到场景
+world.scene.add(decorationGroup);
+
+// ⚠️ 加载 Tree.obj
+objLoader.load('./assets/tree.obj', (root) => {
+    // 遍历模型，给它上个简单的绿色，因为 obj 通常没有材质
+    root.traverse(function(child) {
+        if (child.isMesh) {
+            child.material = new T.MeshStandardMaterial({ color: 0x228b22 });
+            child.castShadow = true;
+        }
+    });
+
+    // 创建 10 棵树作为装饰
+    for (let i = 0; i < 10; i++) {
+        const tree = root.clone();
+        // 随机分布在道路两侧
+        const side = Math.random() > 0.5 ? 1 : -1;
+        const x = side * (15 + Math.random() * 10);
+        const z = (Math.random() - 0.5) * 40;
+        
+        tree.position.set(x, 0, z);
+        
+        // 随机缩放和旋转
+        const scale = 0.1 + Math.random() * 0.1; // 根据你的 obj 大小调整这里的 0.5
+        tree.scale.set(scale, scale, scale);
+        tree.rotation.y = Math.random() * Math.PI * 2;
+        
+        decorationGroup.add(tree);
     }
+    console.log("🌲 Trees loaded via OBJLoader");
+}, undefined, (error) => {
+    console.warn("Could not load tree.obj. Make sure it is in assets/ folder.", error);
+});
+
+// ==================== 模式切换逻辑 ====================
+function toggleGameMode() {
+    isFullMode = !isFullMode;
+    const btn = document.getElementById('mode-toggle');
+    if (btn) {
+        btn.textContent = isFullMode ? "Switch to PROTOTYPE" : "Switch to FULL MODE";
+        
+        // ⚠️ 关键修复：点击后让按钮失去焦点
+        // 这样按空格键就不会再次触发这个按钮了
+        btn.blur(); 
+    }
+
+    // 1. 切换背景 (天空)
+    if (isFullMode) {
+        if (!defaultBackground) defaultBackground = world.scene.background;
+        world.scene.background = skyTexture;
+    } else {
+        world.scene.background = defaultBackground || new T.Color("#000");
+    }
+
+    // 2. 切换地面纹理
+    if (world.groundplane && world.groundplane.mesh) {
+        const mesh = world.groundplane.mesh;
+        if (!defaultGroundMat) defaultGroundMat = mesh.material;
+
+        if (isFullMode) {
+            mesh.material = new T.MeshStandardMaterial({
+                map: groundTexture,
+                roughness: 0.8
+                // metalness: 0.1
+            });
+        } else {
+            mesh.material = defaultGroundMat;
+        }
+    }
+    
+    // 3. 显示/隐藏 加载的模型 (Trees)
+    decorationGroup.visible = isFullMode;
+
+    console.log(`Mode switched to: ${isFullMode ? "FULL" : "PROTOTYPE"}`);
 }
 
+const modeBtn = document.getElementById('mode-toggle');
+if (modeBtn) modeBtn.addEventListener('click', toggleGameMode);
+
+
+// ==================== 窗口与尺寸同步 ====================
 function onWindowResize() {
     const w = window.innerWidth;
     const h = window.innerHeight;
@@ -110,21 +190,22 @@ function onWindowResize() {
             world.solo_camera.updateProjectionMatrix();
         }
     }
-    syncComparisonSizes();
+    if (skeletonCanvas && document.getElementById('zombie-video')) {
+         const vid = document.getElementById('zombie-video');
+         if(vid.videoWidth) {
+             skeletonCanvas.width = vid.videoWidth;
+             skeletonCanvas.height = vid.videoHeight;
+         }
+    }
 }
 window.addEventListener('resize', onWindowResize);
 onWindowResize();
 
 // ==================== 键盘控制 ====================
-window.addEventListener('keydown', (e) => {
-    keys[e.key.toLowerCase()] = true;
-});
+window.addEventListener('keydown', (e) => { keys[e.key.toLowerCase()] = true; });
+window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
 
-window.addEventListener('keyup', (e) => {
-    keys[e.key.toLowerCase()] = false;
-});
-
-// ==================== 获取UI元素 ====================
+// ==================== UI 元素 ====================
 statusDiv = document.getElementById("status");
 zombieCountDiv = document.getElementById("zombie-count");
 heliCountDiv = document.getElementById("heli-count");
@@ -134,15 +215,14 @@ healthDisplayDiv = document.getElementById("health-display");
 waveNumberDiv = document.getElementById("wave-number");
 waveLabelDiv = document.getElementById("wave-label");
 skeletonCanvas = document.getElementById('skeleton-canvas');
-skeletonCtx = skeletonCanvas.getContext('2d');
+if (skeletonCanvas) skeletonCtx = skeletonCanvas.getContext('2d');
 
-// ==================== UI更新 ====================
+// ==================== UI 更新 ====================
 function updateUI() {
     if (combatManager) {
         totalKills = combatManager.getTotalKills();
         playerGold = combatManager.getPlayerGold();
     }
-
     if (zombieCountDiv) zombieCountDiv.textContent = zombies.length;
     if (heliCountDiv) heliCountDiv.textContent = helicopters.length;
     if (killCountDiv) killCountDiv.textContent = totalKills;
@@ -153,59 +233,36 @@ function updateUI() {
 
     const buyButton = document.getElementById('buy-helicopter');
     if (buyButton) {
-        if (playerGold < HELI_PRICE) {
-            buyButton.classList.add('disabled');
-        } else {
-            buyButton.classList.remove('disabled');
-        }
+        if (playerGold < HELI_PRICE) buyButton.classList.add('disabled');
+        else buyButton.classList.remove('disabled');
     }
 }
 
-// ==================== 购买提示 ====================
 function showPurchaseNotification(message) {
     const notification = document.createElement('div');
     notification.className = 'message';
     notification.textContent = message;
     document.body.appendChild(notification);
-
-    setTimeout(() => {
-        notification.remove();
-    }, 2000);
+    setTimeout(() => notification.remove(), 2000);
 }
 
-// ==================== 游戏结束 ====================
 function showGameOver() {
     gameOver = true;
     console.log("💀 GAME OVER! 💀");
-
     document.getElementById('final-wave').textContent = currentWave;
     document.getElementById('final-kills').textContent = totalKills;
     document.getElementById('final-gold').textContent = playerGold;
-
-    const gameOverScreen = document.getElementById('game-over-screen');
-    gameOverScreen.classList.add('show');
-
-    if (zombieSpawnTimer) {
-        clearInterval(zombieSpawnTimer);
-    }
+    document.getElementById('game-over-screen').classList.add('show');
+    if (zombieSpawnTimer) clearInterval(zombieSpawnTimer);
 }
 
-// ==================== 重启游戏 ====================
-document.getElementById('restart-button').addEventListener('click', () => {
-    location.reload();
-});
+const restartBtn = document.getElementById('restart-button');
+if(restartBtn) restartBtn.addEventListener('click', () => location.reload());
 
 // ==================== 购买直升机 ====================
 function buyHelicopter() {
-    if (playerGold < HELI_PRICE) {
-        showPurchaseNotification('❌ Not enough gold!');
-        return;
-    }
-
-    if (helipads.length === 0) {
-        showPurchaseNotification('❌ No helipads available!');
-        return;
-    }
+    if (playerGold < HELI_PRICE) return showPurchaseNotification('❌ Not enough gold!');
+    if (helipads.length === 0) return showPurchaseNotification('❌ No helipads available!');
 
     let availablePad = null;
     for (const pad of helipads) {
@@ -225,226 +282,116 @@ function buyHelicopter() {
         }
     }
 
-    if (!availablePad) {
-        showPurchaseNotification('❌ All helipads occupied!');
-        return;
-    }
+    if (!availablePad) return showPurchaseNotification('❌ All helipads occupied!');
 
     playerGold -= HELI_PRICE;
-    if (combatManager) {
-        combatManager.setPlayerGold(playerGold);
-    }
+    if (combatManager) combatManager.setPlayerGold(playerGold);
 
     const colors = [0x2194ce, 0x21ce94, 0xce2194, 0xce9421, 0x9421ce];
     const color = colors[helicopters.length % colors.length];
-
-    const heli = new DetailedHelicopter({
-        x: availablePad.x,
-        y: 0,
-        z: availablePad.z,
-        scale: 1,
-        color: color,
-        altitude: 5 + helicopters.length * 0.5
-    });
+    const heli = new DetailedHelicopter({ x: availablePad.x, y: 0, z: availablePad.z, scale: 1, color: color, altitude: 5 + helicopters.length * 0.5 });
 
     world.add(heli);
     helicopters.push(heli);
     heli.getPads(helipads);
-
     updateUI();
     showPurchaseNotification('✅ Helicopter deployed!');
-    console.log(`✓ Helicopter purchased! Gold: ${playerGold}`);
 }
-
-document.getElementById('buy-helicopter').addEventListener('click', buyHelicopter);
+const buyBtn = document.getElementById('buy-helicopter');
+if(buyBtn) buyBtn.addEventListener('click', buyHelicopter);
 
 // ==================== 波次系统 ====================
 function updateWaveSystem() {
+    if (!gameStarted) return;
     const now = Date.now();
     const elapsed = now - lastWaveTime;
-
     if (elapsed >= 60000) {
         currentWave++;
         zombieSpeedMultiplier *= 2.0;
         spawnInterval = Math.max(1000, spawnInterval * 0.8);
         lastWaveTime = now;
-
-        if (zombieSpawnTimer) {
-            clearInterval(zombieSpawnTimer);
-        }
-        zombieSpawnTimer = setInterval(() => {
-            if (!gameOver) {
-                spawnZombie();
-            }
-        }, spawnInterval);
-
-        console.log(`🌊 WAVE ${currentWave}! Speed: x${zombieSpeedMultiplier.toFixed(1)}, Spawn interval: ${spawnInterval}ms`);
+        if (zombieSpawnTimer) clearInterval(zombieSpawnTimer);
+        zombieSpawnTimer = setInterval(() => { if (!gameOver && gameStarted) spawnZombie(); }, spawnInterval);
         showPurchaseNotification(`🌊 WAVE ${currentWave} - Difficulty Increased!`);
     }
 }
 
-// ==================== 添加光照 ====================
+// ==================== 场景构建 ====================
 const ambientLight = new T.AmbientLight(0x404040, 0.5);
 world.scene.add(ambientLight);
-
 const directionalLight1 = new T.DirectionalLight(0xffffff, 0.8);
 directionalLight1.position.set(10, 20, 10);
 directionalLight1.castShadow = true;
 world.scene.add(directionalLight1);
-
 const directionalLight2 = new T.DirectionalLight(0x8888ff, 0.3);
 directionalLight2.position.set(-10, 10, -10);
 world.scene.add(directionalLight2);
-
 const moonLight = new T.DirectionalLight(0xaaaaff, 0.2);
 moonLight.position.set(0, 30, 0);
 world.scene.add(moonLight);
 
-// ==================== 创建场景对象 ====================
 baseObject = GameModels.createBase();
 world.scene.add(baseObject);
-
 const road1Data = GameModels.createRoad(0, SPAWN_DISTANCE * 2, 0, 0, 3.2, 0x333333);
 world.scene.add(road1Data.road);
 world.scene.add(road1Data.stripe);
-
 const road2Data = GameModels.createRoad(0, -SPAWN_DISTANCE * 2, 0, 0, 3.2, 0x333333);
 world.scene.add(road2Data.road);
 world.scene.add(road2Data.stripe);
-
 turret = GameModels.createTurret();
 world.scene.add(turret);
-
 const heartsData = GameModels.createHearts();
 world.scene.add(heartsData.heartGroup);
 hearts = heartsData.hearts;
+helipads = [new Helipad(-12, 0, -22), new Helipad(12, 0, -22), new Helipad(-12, 0, 22), new Helipad(12, 0, 22)];
+helipads.forEach(pad => world.add(pad));
 
-const helipad1 = new Helipad(-12, 0, -22);
-const helipad2 = new Helipad(12, 0, -22);
-const helipad3 = new Helipad(-12, 0, 22);
-const helipad4 = new Helipad(12, 0, 22);
-
-helipads = [helipad1, helipad2, helipad3, helipad4];
-
-world.add(helipad1);
-world.add(helipad2);
-world.add(helipad3);
-world.add(helipad4);
-
-console.log("✓ Helipads created: 4, Helicopters: 0");
-
-// ==================== 创建装甲战车 ====================
-armoredVehicle = new ArmoredVehicle({
-    x: 0,
-    z: 10,
-    rotation: 0,
-    scale: 0.5
-});
-
+armoredVehicle = new ArmoredVehicle({ x: 0, z: 10, rotation: 0, scale: 0.5 });
 world.scene.add(armoredVehicle.group);
-console.log("✓ Armored Vehicle created at (0, 0, 10)");
 
-// ==================== 初始化战斗管理器 ====================
-combatManager = new CombatManager(world, {
-    TURRET_DAMAGE: TURRET_DAMAGE,
-    HELI_DAMAGE: HELI_DAMAGE,
-    VEHICLE_DAMAGE: 80,
-    ZOMBIE_GOLD_REWARD: ZOMBIE_GOLD_REWARD,
-    BASE_RADIUS: BASE_RADIUS
-});
-
+if (typeof CombatManager === 'undefined') console.error("❌ CRITICAL ERROR: CombatManager undefined.");
+combatManager = new CombatManager(world, { TURRET_DAMAGE, HELI_DAMAGE, VEHICLE_DAMAGE: 80, ZOMBIE_GOLD_REWARD, BASE_RADIUS });
 combatManager.setVehicle(armoredVehicle);
 combatManager.setPlayerGold(playerGold);
 
-console.log("✓ Combat Manager initialized");
-
-// ==================== 战车移动控制 ====================
+// ==================== 战车控制 ====================
 function updateVehicleControl() {
-    if (!armoredVehicle) return;
-
+    if (!armoredVehicle || !gameStarted) return;
     const forward = keys['w'] ? 1 : keys['s'] ? -1 : 0;
     const turn = keys['a'] ? 1 : keys['d'] ? -1 : 0;
-
-    if (keys[' ']) {
-        armoredVehicle.maxSpeed = 0.6;
-    } else {
-        armoredVehicle.maxSpeed = 0.3;
-    }
-
+    armoredVehicle.maxSpeed = keys[' '] ? 0.6 : 0.3;
     armoredVehicle.move(forward, turn);
 }
 
-// ==================== 相机跟随战车（从车后上方、俯视前方） ====================
 function updateVehicleCamera() {
     if (!armoredVehicle) return;
-
-    const vehicleObj = armoredVehicle.group;   // 真正持有位姿的对象
-
-    // ===== 可以调的参数 =====
-    // 距离车的后方距离（越大越远）
-    const CAMERA_DISTANCE = 35;   
-
-    // 相机高度（越大越高）
-    const CAMERA_HEIGHT = 25;     
-
-    // 看向车前方多远的位置（越大越“看远处”）
-    const LOOK_FORWARD = 14;     
-
-    // 相机视线目标的高度（越小越往下看）
-    const LOOK_HEIGHT = -5;       
-    // ======================
-
-    // 1. 相机位置：车的局部(0, CAMERA_HEIGHT, -CAMERA_DISTANCE) → 世界坐标（车后上方）
-    const cameraOffsetLocal = new T.Vector3(0, CAMERA_HEIGHT, -CAMERA_DISTANCE);
+    const vehicleObj = armoredVehicle.group;
+    const cameraOffsetLocal = new T.Vector3(0, 25, -35);
     const cameraWorldPos = cameraOffsetLocal.clone();
     vehicleObj.localToWorld(cameraWorldPos);
-
-    // 平滑跟随
     world.camera.position.lerp(cameraWorldPos, 0.15);
-
-    // 2. 视线目标：车的局部(0, LOOK_HEIGHT, LOOK_FORWARD) → 世界坐标（车头前方偏下）
-    const lookAtLocal = new T.Vector3(0, LOOK_HEIGHT, LOOK_FORWARD);
+    const lookAtLocal = new T.Vector3(0, -5, 14);
     const lookAtWorld = lookAtLocal.clone();
     vehicleObj.localToWorld(lookAtWorld);
-
     world.camera.lookAt(lookAtWorld);
-
-    // 3. 如果有 OrbitControls，顺便更新 target，避免它把视线改回原点
-    if (world.controls && world.controls.target) {
-        world.controls.target.copy(lookAtWorld);
-        if (typeof world.controls.update === "function") {
-            world.controls.update();
-        }
-    }
-    if (world.orbit_controls && world.orbit_controls.target) {
-        world.orbit_controls.target.copy(lookAtWorld);
-        if (typeof world.orbit_controls.update === "function") {
-            world.orbit_controls.update();
-        }
-    }
+    if (world.controls && world.controls.target) world.controls.target.copy(lookAtWorld);
+    if (world.orbit_controls && world.orbit_controls.target) world.orbit_controls.target.copy(lookAtWorld);
 }
-
 
 // ==================== 僵尸生成 ====================
 function spawnZombie() {
-    if (gameOver) return;
+    if (gameOver || !gameStarted) return;
     const zombieVideo = document.getElementById('zombie-video');
     if (!zombieVideo) return;
-
     const spawnAtTop = Math.random() < 0.5;
-    const jitterX = (Math.random() - 0.5) * 1.6;
     const radius = SPAWN_DISTANCE + Math.random() * 3;
-    const sx = jitterX;
-    const sz = spawnAtTop ? -radius : radius;
-
     const zombie = new Zombie({
-        x: sx,
-        z: sz,
+        x: (Math.random() - 0.5) * 1.6,
+        z: spawnAtTop ? -radius : radius,
         video: zombieVideo,
         speed: (0.0015 + Math.random() * 0.001) * zombieSpeedMultiplier,
         health: ZOMBIE_BASE_HEALTH
     });
-
     world.add(zombie);
     zombies.push(zombie);
     updateUI();
@@ -452,21 +399,16 @@ function spawnZombie() {
 
 // ==================== 骨骼绘制 ====================
 function drawSkeleton(pose) {
+    if (!skeletonCtx || !skeletonCanvas) return;
     skeletonCtx.clearRect(0, 0, skeletonCanvas.width, skeletonCanvas.height);
-
     if (!pose || !pose.keypoints) return;
-
     const keypoints = pose.keypoints;
     const findKeypointByName = (name) => {
-        if (!keypoints) return null;
         for (let i = 0; i < keypoints.length; i++) {
-            const k = keypoints[i];
-            if (!k) continue;
-            if (k.name === name || k.part === name || k.label === name) return k;
+            if (keypoints[i].name === name || keypoints[i].part === name || keypoints[i].label === name) return keypoints[i];
         }
         return null;
     };
-
     const get2DPosBy = (name, blazeIndex, moveIndex) => {
         let p = findKeypointByName(name);
         if (!p) {
@@ -477,32 +419,19 @@ function drawSkeleton(pose) {
         if (!p || (typeof p.score === 'number' && p.score < 0.3)) return null;
         return { x: p.x, y: p.y };
     };
-
-    const scaleX = skeletonCanvas.width / (document.getElementById('zombie-video').videoWidth || 640);
-    const scaleY = skeletonCanvas.height / (document.getElementById('zombie-video').videoHeight || 480);
-
+    const videoEl = document.getElementById('zombie-video');
+    if (!videoEl) return;
+    const scaleX = skeletonCanvas.width / (videoEl.videoWidth || 640);
+    const scaleY = skeletonCanvas.height / (videoEl.videoHeight || 480);
+    
     skeletonCtx.strokeStyle = '#44ff44';
     skeletonCtx.lineWidth = 3;
     skeletonCtx.lineCap = 'round';
-
-    const DRAW_CONNECTIONS = [
-        ['left_shoulder', 11, 5, 'right_shoulder', 12, 6],
-        ['left_shoulder', 11, 5, 'left_hip', 23, 11],
-        ['right_shoulder', 12, 6, 'right_hip', 24, 12],
-        ['left_shoulder', 11, 5, 'left_elbow', 13, 7],
-        ['left_elbow', 13, 7, 'left_wrist', 15, 9],
-        ['right_shoulder', 12, 6, 'right_elbow', 14, 8],
-        ['right_elbow', 14, 8, 'right_wrist', 16, 10],
-        ['left_hip', 23, 11, 'left_knee', 25, 13],
-        ['left_knee', 25, 13, 'left_ankle', 27, 15],
-        ['right_hip', 24, 12, 'right_knee', 26, 14],
-        ['right_knee', 26, 14, 'right_ankle', 28, 16]
-    ];
-
+    
+    const DRAW_CONNECTIONS = [['left_shoulder', 11, 5, 'right_shoulder', 12, 6], ['left_shoulder', 11, 5, 'left_hip', 23, 11], ['right_shoulder', 12, 6, 'right_hip', 24, 12], ['left_shoulder', 11, 5, 'left_elbow', 13, 7], ['left_elbow', 13, 7, 'left_wrist', 15, 9], ['right_shoulder', 12, 6, 'right_elbow', 14, 8], ['right_elbow', 14, 8, 'right_wrist', 16, 10], ['left_hip', 23, 11, 'left_knee', 25, 13], ['left_knee', 25, 13, 'left_ankle', 27, 15], ['right_hip', 24, 12, 'right_knee', 26, 14], ['right_knee', 26, 14, 'right_ankle', 28, 16]];
     for (const c of DRAW_CONNECTIONS) {
-        const [nameA, bA, mA, nameB, bB, mB] = c;
-        const A = get2DPosBy(nameA, bA, mA);
-        const B = get2DPosBy(nameB, bB, mB);
+        const A = get2DPosBy(c[0], c[1], c[2]);
+        const B = get2DPosBy(c[3], c[4], c[5]);
         if (A && B) {
             skeletonCtx.beginPath();
             skeletonCtx.moveTo(A.x * scaleX, A.y * scaleY);
@@ -510,164 +439,89 @@ function drawSkeleton(pose) {
             skeletonCtx.stroke();
         }
     }
-
-    const DRAW_KEYPOINTS = [
-        ['nose', 0, 0], ['left_eye', 1, 1], ['right_eye', 2, 2],
-        ['left_shoulder', 11, 5], ['right_shoulder', 12, 6],
-        ['left_elbow', 13, 7], ['right_elbow', 14, 8],
-        ['left_wrist', 15, 9], ['right_wrist', 16, 10],
-        ['left_hip', 23, 11], ['right_hip', 24, 12],
-        ['left_knee', 25, 13], ['right_knee', 26, 14],
-        ['left_ankle', 27, 15], ['right_ankle', 28, 16]
-    ];
-
-    for (const k of DRAW_KEYPOINTS) {
-        const [name, bIdx, mIdx] = k;
-        const p = get2DPosBy(name, bIdx, mIdx);
-        if (p) {
-            const x = p.x * scaleX;
-            const y = p.y * scaleY;
-
-            skeletonCtx.fillStyle = '#ffffff';
-            skeletonCtx.beginPath();
-            skeletonCtx.arc(x, y, 5, 0, 2 * Math.PI);
-            skeletonCtx.fill();
-
-            skeletonCtx.fillStyle = '#44ff44';
-            skeletonCtx.beginPath();
-            skeletonCtx.arc(x, y, 3, 0, 2 * Math.PI);
-            skeletonCtx.fill();
-        }
-    }
 }
 
-// ==================== 姿态检测循环 ====================
+// ==================== 姿态检测 ====================
 async function poseDetectionLoop() {
     const video = document.getElementById('zombie-video');
-
-    if (!sharedDetector || !video.videoWidth) {
+    if (!sharedDetector || !video || !video.videoWidth) {
         requestAnimationFrame(poseDetectionLoop);
         return;
     }
-
     try {
         const poses = await sharedDetector.estimatePoses(video, { flipHorizontal: false });
-
         if (poses && poses.length > 0) {
-            const pose = poses[0];
-            drawSkeleton(pose);
-
-            zombies.forEach(zombie => {
-                zombie.applyPoseToModel(pose);
-            });
+            drawSkeleton(poses[0]);
+            zombies.forEach(zombie => zombie.applyPoseToModel(poses[0]));
         }
-    } catch (error) {
-        console.error('Pose detection error:', error);
-    }
-
+    } catch (error) { console.error(error); }
     requestAnimationFrame(poseDetectionLoop);
 }
 
-// ==================== 初始化僵尸系统 ====================
 async function initZombies() {
     statusDiv.textContent = "Initializing...";
-
     try {
         sharedDetector = await initSharedDetector();
-
-        if (!sharedDetector) {
-            console.error("Failed to initialize shared detector");
-            statusDiv.textContent = "Failed";
-            return;
-        }
-
-        console.log("✓ Shared detector initialized");
+        if (!sharedDetector) return;
         poseDetectionLoop();
-
         zombiesInitialized = true;
-        statusDiv.textContent = "Ready";
-
-        zombieSpawnTimer = setInterval(() => {
-            if (!gameOver) {
-                spawnZombie();
-            }
-        }, spawnInterval);
-
+        statusDiv.textContent = "Waiting for Start..."; 
         updateUI();
-
-    } catch (error) {
-        console.error("Failed to initialize:", error);
-        statusDiv.textContent = "Failed";
-    }
+    } catch (error) { console.error(error); }
 }
-
 initZombies();
 
-// ==================== 主更新循环 ====================
+// ==================== 开始游戏与控制 ====================
+const startBtn = document.getElementById('start-game-btn');
+const startScreen = document.getElementById('start-screen');
+if (startBtn && startScreen) {
+    startBtn.addEventListener('click', () => {
+        startScreen.style.display = 'none';
+        gameStarted = true;
+        statusDiv.textContent = "Game Started!";
+        lastWaveTime = Date.now();
+        if (!zombieSpawnTimer) zombieSpawnTimer = setInterval(() => { if (!gameOver) spawnZombie(); }, spawnInterval);
+        const video = document.getElementById('zombie-video');
+        if (video) video.play().catch(e => console.log(e));
+    });
+}
+
+function setupMobileControls() {
+    const map = { 'btn-w': 'w', 'btn-a': 'a', 'btn-s': 's', 'btn-d': 'd', 'btn-space': ' ' };
+    const setKey = (key, state) => { if (keys[key] !== state) keys[key] = state; };
+    Object.keys(map).forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('touchstart', (e) => { e.preventDefault(); setKey(map[id], true); el.classList.add('active'); }, { passive: false });
+        el.addEventListener('touchend', (e) => { e.preventDefault(); setKey(map[id], false); el.classList.remove('active'); }, { passive: false });
+        el.addEventListener('mousedown', (e) => { setKey(map[id], true); el.classList.add('active'); });
+        const clear = () => { setKey(map[id], false); el.classList.remove('active'); };
+        el.addEventListener('mouseup', clear);
+        el.addEventListener('mouseleave', clear);
+    });
+}
+setupMobileControls();
+
+// ==================== 主循环 ====================
 function updateLoop() {
     debugFrameCount++;
-
-    if (zombiesInitialized && !gameOver) {
-        // 战车控制和相机
+    if (gameStarted && zombiesInitialized && !gameOver) {
         updateVehicleControl();
         updateVehicleCamera();
-
-        // 战斗系统（由CombatManager统一管理）
-        baseHealth = combatManager.update(
-            turret,
-            helicopters,
-            zombies,
-            baseHealth,
-            hearts,
-            (newHealth) => {
-                baseHealth = newHealth;
-                updateUI();
-            },
-            () => {
-                showGameOver();
-            }
-        );
-
-        // 波次系统
+        if (combatManager) {
+            baseHealth = combatManager.update(turret, helicopters, zombies, baseHealth, hearts, (h) => { baseHealth = h; updateUI(); }, showGameOver);
+        }
         updateWaveSystem();
-
-        // 更新UI
         updateUI();
+    } else if (!gameStarted && zombiesInitialized) {
+        updateVehicleCamera();
     }
-
-    // Debug状态报告（每5秒）
-    const now = Date.now();
-    if (now - lastDebugTime > 5000) {
-        console.log("\n=== STATUS REPORT ===");
-        console.log(`Zombies alive: ${zombies.length}`);
-        console.log(`Base health: ${baseHealth}/5`);
-        console.log(`Game over: ${gameOver}`);
-        console.log(`Total kills: ${totalKills}`);
-        console.log(`Gold: ${playerGold}`);
-        console.log("====================\n");
-        lastDebugTime = now;
-    }
-
     requestAnimationFrame(updateLoop);
 }
 
-// ==================== 相机设置 ====================
-world.camera.position.set(0, 8, -2);
-// world.camera.lookAt(0, 2, 10);  // 让 updateVehicleCamera 控制相机方向
-world.solo_camera.position.set(1, 1, 1);
+if(world && world.camera) world.camera.position.set(0, 8, -2);
+if(world && world.solo_camera) world.solo_camera.position.set(1, 1, 1);
 
-// 如完全不需要鼠标控制相机，也可以直接禁用 OrbitControls：
-// if (world.controls) world.controls.enabled = false;
-// if (world.orbit_controls) world.orbit_controls.enabled = false;
-
-// ==================== 启动世界 ====================
 world.go();
 updateLoop();
 updateUI();
-
-console.log("=== ZOMBIE DEFENSE INITIALIZED ===");
-console.log("Gold:", playerGold);
-console.log("Helicopters:", helicopters.length);
-console.log("Zombie Health:", ZOMBIE_BASE_HEALTH);
-console.log("Kill Reward:", ZOMBIE_GOLD_REWARD);
-console.log("Heli Price:", HELI_PRICE);
